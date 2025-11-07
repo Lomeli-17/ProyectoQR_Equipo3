@@ -1,0 +1,22 @@
+# Ejecutables y objetos
+*.exe
+*.o
+*.obj
+*.dll
+
+# Carpetas de build
+Debug/
+Release/
+
+# Archivos de Dev-C++ (workspace/cache)
+*.dev
+*.layout
+*.dep
+*.gch
+
+# Archivos del sistema
+Thumbs.db
+.DS_Store
+
+# Imágenes (si quieres subirlas, quítalas de aquí)
+# imagenes/
