@@ -135,7 +135,7 @@ void poner_finder_con_separador(int r0, int c0) {
             usado[r0 + r][c0 + c] = true;
         }
     }
-    // separador blanco 1px alrededor (si está dentro)
+    // separador blanco 
     for (int r = -1; r <= 7; ++r) {
         for (int c = -1; c <= 7; ++c) {
             int rr = r0 + r, cc = c0 + c;
