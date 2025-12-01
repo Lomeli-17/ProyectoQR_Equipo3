@@ -239,52 +239,145 @@ void insertar_datos(const vector<int> &bitsDatos, const vector<int> &bitsECC) {
         hacia_arriba = !hacia_arriba;
     }
 }
-void aplicar_mascara_0() {
-    //(fila + columna) % 2 == 0  → invertir el bit del modulo si NO es un modulo fijo
-    for (int r = 0; r < N; r++) {
-        for (int c = 0; c < N; c++) {
-            // solo modificar modulos de datos, nunca los fijos
-            if (usado[r][c]) continue;
-            // si es blanco/negro valido
-            if (matriz[r][c] == 0 || matriz[r][c] == 1) {
-                // condición de mascara 0
-                if (((r + c) % 2) == 0) {
-                    matriz[r][c] ^= 1; // invertir bit
-                }
-            }
-        }
-    }
+void reservar_format_info_correcto() {
+    // fila 8, columnas 0..5
+    for (int c = 0; c <= 5; ++c) { usado[8][c] = true; matriz[8][c] = -1; }
+    // columna 8, filas 0..5
+    for (int r = 0; r <= 5; ++r) { usado[r][8] = true; matriz[r][8] = -1; }
+    // los tres módulos alrededor (7,8),(8,7),(8,8)
+    usado[7][8] = true; matriz[7][8] = -1;
+    usado[8][7] = true; matriz[8][7] = -1;
+    usado[8][8] = true; matriz[8][8] = -1;
+    // copia espejo: fila 8, columnas N-1 .. N-7
+    for (int i = 0; i < 7; ++i) { int c = N - 1 - i; usado[8][c] = true; matriz[8][c] = -1; }
+    // copia espejo: columna 8, filas N-1 .. N-7
+    for (int i = 0; i < 7; ++i) { int r = N - 1 - i; usado[r][8] = true; matriz[r][8] = -1; }
 }
-void imprimir_matriz() {
+//reemplazo de la mascara fija por seleccion automatica
+// devuelve true si la condicion de la mascara id se cumple en (r,c)
+bool mask_cond(int id, int r, int c) {
+    switch(id) {
+        case 0: return ((r + c) % 2) == 0;
+        case 1: return (r % 2) == 0;
+        case 2: return (c % 3) == 0;
+        case 3: return ((r + c) % 3) == 0;
+        case 4: return ((r/2 + c/3) % 2) == 0;
+        case 5: return ((r*c) % 2 + (r*c) % 3) == 0;
+        case 6: return (((r*c) % 2 + (r*c) % 3) % 2) == 0;
+        case 7: return (((r+c) % 2 + (r*c) % 3) % 2) == 0;
+    }
+    return false;
+}
+
+// aplica la mascara 'id' sobre la matriz real (respeta usado)
+void aplicar_mascara_id(int id) {
     for (int r = 0; r < N; ++r) {
         for (int c = 0; c < N; ++c) {
-            if (matriz[r][c] == 1) cout << "██";
-            else if (matriz[r][c] == 0) cout << "  ";
-            else cout << "..";
+            if (usado[r][c]) continue;
+            if (matriz[r][c] == 0 || matriz[r][c] == 1) {
+                if (mask_cond(id, r, c)) matriz[r][c] ^= 1;
+            }
         }
-        cout << '\n';
     }
 }
-/*    void imprimir_matriz() {
-    
-        // imprime la matriz usando ascii 254 para negro y espacio para blanco
-        for(int r = 0; r < N; r++){
-            for(int c = 0; c < N; c++){
-    
-                if(matriz[r][c] == 1){
-                    cout << (char)254;  // negro
-                }
-                else if(matriz[r][c] == 0){
-                    cout << ' ';        // blanco
-                }
-                else{
-                    cout << '?';        // por si algo quedo sin asignar (por ahora va a ser hasta que se inserten los datos)
-                }
-            }
-            cout << "\n";
+
+//funciones para evaluar penalizacion N1..N4 (simplificada pero suficiente)
+int penalizacion_para_mascara(int id) {
+    vector<vector<int>> tmp = matriz;
+    // aplicar mascara sobre copia (solo donde no es fijo)
+    for (int r = 0; r < N; ++r) for (int c = 0; c < N; ++c) {
+        if (usado[r][c]) continue;
+        if (tmp[r][c] == 0 || tmp[r][c] == 1) {
+            if (mask_cond(id, r, c)) tmp[r][c] ^= 1;
         }
-   }
-        CAMBIE ESTA FUNCIÓN SEGÚN YO PARA QUE SE VEA MEJOR, PERO NO SÉ QUE FORMATO PREFIERAN DEJAR*/
+    }
+
+    int score = 0;
+    //secuencias horizontales y verticales >=5
+    for (int r = 0; r < N; ++r) {
+        int run = 1;
+        for (int c = 1; c < N; ++c) {
+            if (tmp[r][c] == tmp[r][c-1]) run++; else { if (run >= 5) score += 3 + (run-5); run = 1; }
+        }
+        if (run >= 5) score += 3 + (run-5);
+    }
+    for (int c = 0; c < N; ++c) {
+        int run = 1;
+        for (int r = 1; r < N; ++r) {
+            if (tmp[r][c] == tmp[r-1][c]) run++; else { if (run >= 5) score += 3 + (run-5); run = 1; }
+        }
+        if (run >= 5) score += 3 + (run-5);
+    }
+
+    // bloques 2x2
+    for (int r = 0; r < N-1; ++r) for (int c = 0; c < N-1; ++c) {
+        int v = tmp[r][c];
+        if (v==tmp[r][c+1] && v==tmp[r+1][c] && v==tmp[r+1][c+1]) score += 3;
+    }
+
+    // patrones tipo 1:1:3:1:1 (simplificado)
+    for (int r = 0; r < N; ++r) {
+        for (int c = 0; c <= N-7; ++c) {
+            if (tmp[r][c]==1 && tmp[r][c+1]==0 && tmp[r][c+2]==1 && tmp[r][c+3]==1 && tmp[r][c+4]==1 && tmp[r][c+5]==0 && tmp[r][c+6]==1) {
+                score += 40;
+            }
+        }
+    }
+    for (int c = 0; c < N; ++c) {
+        for (int r = 0; r <= N-7; ++r) {
+            if (tmp[r][c]==1 && tmp[r+1][c]==0 && tmp[r+2][c]==1 && tmp[r+3][c]==1 && tmp[r+4][c]==1 && tmp[r+5][c]==0 && tmp[r+6][c]==1) {
+                score += 40;
+            }
+        }
+    }
+
+    // balance de oscuros (porcentaje)
+    int total = 0, dark = 0;
+    for (int r = 0; r < N; ++r) for (int c = 0; c < N; ++c) if (tmp[r][c]==0 || tmp[r][c]==1) { total++; if (tmp[r][c]==1) dark++; }
+    if (total > 0) {
+        int percent = (dark * 100) / total;
+        int prev5 = abs(percent - 50) / 5;
+        score += prev5 * 10;
+    }
+
+    return score;
+}
+
+// elige la mascara con menor penalizacion
+int elegir_mejor_mascara() {
+    int best = 0;
+    int bestScore = (1<<30); // CAMBIO: uso un valor grande en lugar de incluir <climits>
+    for (int m = 0; m < 8; ++m) {
+        int s = penalizacion_para_mascara(m);
+        if (s < bestScore) { bestScore = s; best = m; }
+    }
+    return best;
+}
+
+/* generacion correcta de los 15 bits de formato (5 bits de datos + 10 bits BCH) y XOR con 0x5412
+ ec_level: 0=L,1=M,2=Q,3=H  (usamos la codificacion de 2 bits: L=01, M=00, Q=11, H=10)*/
+int generar_format_bits_int(int mask_id, int ec_level) {
+    // mapear ec_level a los 2 bits segun estandar: L=01, M=00, Q=11, H=10
+    int ec_bits;
+    switch(ec_level) {
+        case 0: ec_bits = 0b01; break; // L
+        case 1: ec_bits = 0b00; break; // M
+        case 2: ec_bits = 0b11; break; // Q
+        case 3: ec_bits = 0b10; break; // H
+        default: ec_bits = 0b00; break;
+    }
+    int data = (ec_bits << 3) | (mask_id & 0x7); // 5 bits
+    int d = data << 10; // espacio para 10 bits BCH
+    int g = 0x537; // generador para BCH(15,5)
+    // calcular resto del polinomio
+    for (int i = 14; i >= 10; --i) {
+        if (d & (1 << i)) {
+            d ^= (g << (i - 10));
+        }
+    }
+    int format15 = ((data << 10) | (d & 0x3FF)) ^ 0x5412; // XOR con la mascara 0x5412
+    return format15 & 0x7FFF; // 15 bits
+}
 vector<int> format_info_bits = {
     1,1,1,0,1,1,1,1,1,0,0,0,1,0,0
 };
@@ -332,6 +425,53 @@ void colocar_format_info() {
     // nota: el bit restante (si quedara) ya fue colocado en (8,8) arriba.
 }
 
+void aplicar_mascara_0() {
+    //(fila + columna) % 2 == 0  → invertir el bit del modulo si NO es un modulo fijo
+    for (int r = 0; r < N; r++) {
+        for (int c = 0; c < N; c++) {
+            // solo modificar modulos de datos, nunca los fijos
+            if (usado[r][c]) continue;
+            // si es blanco/negro valido
+            if (matriz[r][c] == 0 || matriz[r][c] == 1) {
+                // condición de mascara 0
+                if (((r + c) % 2) == 0) {
+                    matriz[r][c] ^= 1; // invertir bit
+                }
+            }
+        }
+    }
+}
+void imprimir_matriz() {
+    for (int r = 0; r < N; ++r) {
+        for (int c = 0; c < N; ++c) {
+            if (matriz[r][c] == 1) cout << "██";
+            else if (matriz[r][c] == 0) cout << "  ";
+            else cout << "..";
+        }
+        cout << '\n';
+    }
+}
+/*    void imprimir_matriz() {
+    
+        // imprime la matriz usando ascii 254 para negro y espacio para blanco
+        for(int r = 0; r < N; r++){
+            for(int c = 0; c < N; c++){
+    
+                if(matriz[r][c] == 1){
+                    cout << (char)254;  // negro
+                }
+                else if(matriz[r][c] == 0){
+                    cout << ' ';        // blanco
+                }
+                else{
+                    cout << '?';        // por si algo quedo sin asignar (por ahora va a ser hasta que se inserten los datos)
+                }
+            }
+            cout << "\n";
+        }
+   }
+        CAMBIE ESTA FUNCIÓN SEGÚN YO PARA QUE SE VEA MEJOR, PERO NO SÉ QUE FORMATO PREFIERAN DEJAR*/
+
 int main(){
     string url;
     cout<<"Ingrese la URL: ";
@@ -342,9 +482,25 @@ int main(){
     vector<int>bits_correccion = correccion_errores(datos_completos);
 
     construir_matriz_basica_simple();
-    colocar_format_info();
+    reservar_format_info_correcto();
     insertar_datos(datos_completos, bits_correccion);
-    aplicar_mascara_0();
+    for (int m = 0; m < 8; ++m) {
+        int s = penalizacion_para_mascara(m);
+    }
+    int mejor = elegir_mejor_mascara();
+    aplicar_mascara_id(mejor);
+    
+    // generar los 15 bits de formato con la máscara elegida y nivel EC
+    // elegimos nivel EC = M (1) por compatibilidad con tu estructura de datos (puedes cambiar a 0=L,2=Q,3=H)
+    int ec_level = 1; // 0=L,1=M,2=Q,3=H
+    int f15 = generar_format_bits_int(mejor, ec_level);
+    // actualizar el vector format_info_bits con los 15 bits (MSB primero)
+    format_info_bits.clear();
+    for (int i = 14; i >= 0; --i) {
+        format_info_bits.push_back((f15 >> i) & 1);
+    }
+    // ahora colocamos la info de formato (usa el vector actualizado)
+    colocar_format_info();
     imprimir_matriz();
     
     return 0;
