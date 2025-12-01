@@ -1,3 +1,4 @@
+
 #include<iostream>
 #include<string>
 #include<vector>
@@ -108,7 +109,7 @@ vector<int> correccion_errores(const vector<int> &bitsDatos) {
             ecc[i] = ecc[i + 1];
         ecc[nsym - 1] = 0;
         //se ultiliza el xor para saber si se va a corregiro mo
-          if (f != 0) {
+         if (f != 0) {
             for (int i = 0; i < nsym; i++)
                 ecc[i] ^= gf_mult(gen[i], f);
         }
@@ -153,7 +154,7 @@ void poner_finders() {
 } 
 
  void poner_timing_simples() {
-        for (int c = 0; c < N; ++c) {
+       for (int c = 0; c < N; ++c) {
         if (!usado[6][c]) { matriz[6][c] = (c % 2 == 0) ? 1 : 0; usado[6][c] = true; }
         }
     for (int r = 0; r < N; ++r) {
@@ -161,7 +162,7 @@ void poner_finders() {
         }
     }
     
-    void reservar_format_info() {
+   void reservar_format_info() {
     // copia original (arriba/izquierda de la matriz).
     for (int c = 0; c <= 8; ++c) {
         if (!usado[8][c]) { matriz[8][c] = 0; usado[8][c] = true; }
@@ -178,7 +179,7 @@ void poner_finders() {
     }
 }
     
-    void poner_dark_module() {
+   void poner_dark_module() {
     int rr = 8;
     int cc = N - 8;
     if (!usado[rr][cc]) {
@@ -187,7 +188,7 @@ void poner_finders() {
     }
 }
     
- void construir_matriz_basica_simple() {
+  void construir_matriz_basica_simple() {
     for (int r = 0; r < N; ++r) for (int c = 0; c < N; ++c) { matriz[r][c] = -1; usado[r][c] = false; }
     poner_finders();
     poner_timing_simples();
@@ -217,10 +218,6 @@ void insertar_datos(const vector<int> &bitsDatos, const vector<int> &bitsECC) {
                 for (int j = 0; j < 2; ++j) {
                     int c = (j == 0) ? c1 : c2;
                     if (c < 0 || c >= N) continue;
-                    
-                    // CORRECCIÓN AÑADIDA: Saltarse la fila y columna 8
-                    if (r == 8 || c == 8) continue; 
-                    
                     if (usado[r][c]) continue;
                     matriz[r][c] = (i < (int)bitsTotales.size()) ? bitsTotales[i++] : 0;
                     usado[r][c] = true;
@@ -231,10 +228,6 @@ void insertar_datos(const vector<int> &bitsDatos, const vector<int> &bitsECC) {
                 for (int j = 0; j < 2; ++j) {
                     int c = (j == 0) ? c1 : c2;
                     if (c < 0 || c >= N) continue;
-                    
-                    // CORRECCIÓN AÑADIDA: Saltarse la fila y columna 8
-                    if (r == 8 || c == 8) continue;
-                    
                     if (usado[r][c]) continue; // si ya está usado lo salta
                     matriz[r][c] = (i < (int)bitsTotales.size()) ? bitsTotales[i++] : 0;
                     usado[r][c] = true; // marca como usado
@@ -242,7 +235,7 @@ void insertar_datos(const vector<int> &bitsDatos, const vector<int> &bitsECC) {
             }
         }
 
-        // avanza al siguiente par de columnas y alterna la dirección
+        // avanza al siguiente par de columnas y alterna  la dirección
         col -= 2;
         hacia_arriba = !hacia_arriba;
     }
@@ -363,7 +356,7 @@ int elegir_mejor_mascara() {
 }
 
 /* generacion correcta de los 15 bits de formato (5 bits de datos + 10 bits BCH) y XOR con 0x5412
-  ec_level: 0=L,1=M,2=Q,3=H  (usamos la codificacion de 2 bits: L=01, M=00, Q=11, H=10)*/
+ ec_level: 0=L,1=M,2=Q,3=H  (usamos la codificacion de 2 bits: L=01, M=00, Q=11, H=10)*/
 int generar_format_bits_int(int mask_id, int ec_level) {
     // mapear ec_level a los 2 bits segun estandar: L=01, M=00, Q=11, H=10
     int ec_bits;
@@ -459,12 +452,12 @@ void imprimir_matriz() {
         cout << '\n';
     }
 }
-/* void imprimir_matriz() {
-        
+/*    void imprimir_matriz() {
+    
         // imprime la matriz usando ascii 254 para negro y espacio para blanco
         for(int r = 0; r < N; r++){
             for(int c = 0; c < N; c++){
-        
+    
                 if(matriz[r][c] == 1){
                     cout << (char)254;  // negro
                 }
@@ -477,7 +470,7 @@ void imprimir_matriz() {
             }
             cout << "\n";
         }
-       }
+   }
         CAMBIE ESTA FUNCIÓN SEGÚN YO PARA QUE SE VEA MEJOR, PERO NO SÉ QUE FORMATO PREFIERAN DEJAR*/
 
 int main(){
