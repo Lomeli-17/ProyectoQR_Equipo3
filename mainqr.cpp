@@ -191,7 +191,6 @@ void poner_finders() {
     for (int r = 0; r < N; ++r) for (int c = 0; c < N; ++c) { matriz[r][c] = -1; usado[r][c] = false; }
     poner_finders();
     poner_timing_simples();
-    reservar_format_info();
     poner_dark_module();
 }
 
@@ -240,12 +239,28 @@ void insertar_datos(const vector<int> &bitsDatos, const vector<int> &bitsECC) {
         hacia_arriba = !hacia_arriba;
     }
 }
-
+void aplicar_mascara_0() {
+    //(fila + columna) % 2 == 0  → invertir el bit del modulo si NO es un modulo fijo
+    for (int r = 0; r < N; r++) {
+        for (int c = 0; c < N; c++) {
+            // solo modificar modulos de datos, nunca los fijos
+            if (usado[r][c]) continue;
+            // si es blanco/negro valido
+            if (matriz[r][c] == 0 || matriz[r][c] == 1) {
+                // condición de mascara 0
+                if (((r + c) % 2) == 0) {
+                    matriz[r][c] ^= 1; // invertir bit
+                }
+            }
+        }
+    }
+}
 void imprimir_matriz() {
     for (int r = 0; r < N; ++r) {
         for (int c = 0; c < N; ++c) {
             if (matriz[r][c] == 1) cout << "██";
-            else cout << "  ";
+            else if (matriz[r][c] == 0) cout << "  ";
+            else cout << "..";
         }
         cout << '\n';
     }
@@ -270,6 +285,52 @@ void imprimir_matriz() {
         }
    }
         CAMBIE ESTA FUNCIÓN SEGÚN YO PARA QUE SE VEA MEJOR, PERO NO SÉ QUE FORMATO PREFIERAN DEJAR*/
+vector<int> format_info_bits = {
+    1,1,1,0,1,1,1,1,1,0,0,0,1,0,0
+};
+
+void colocar_format_info() {
+
+    // fila 8, columnas 0–5  (6 bits)
+    for (int i = 0; i < 6; i++) {
+        matriz[8][i] = format_info_bits[i];
+        usado[8][i]  = true;
+    }
+
+    // columna 8, filas 0–5  (siguientes 6)
+    for (int i = 0; i < 6; i++) {
+        matriz[i][8] = format_info_bits[6 + i];
+        usado[i][8]  = true;
+    }
+
+    // saltar (8,6) que es timing pattern, continuar con los 3 bits restantes
+    matriz[7][8] = format_info_bits[12];
+    usado[7][8] = true;
+
+    matriz[8][7] = format_info_bits[13];
+    usado[8][7] = true;
+
+    matriz[8][8] = format_info_bits[14];
+    usado[8][8] = true;
+
+    //  copia espejo (derecha e inferior)
+
+    // fila 8, columnas N-1 .. N-7  <- bits 0..6 (en el mismo orden)
+    for (int i = 0; i < 7; ++i) {
+        int c = N - 1 - i;
+        matriz[8][c] = format_info_bits[i];
+        usado[8][c] = true;
+    }
+
+    // columna 8, filas N-1 .. N-7  <- bits 14..8 (colocados de arriba hacia abajo en espejo)
+    int k = 14;
+    for (int r = N - 1; r >= N - 7; --r) {
+        matriz[r][8] = format_info_bits[k--];
+        usado[r][8] = true;
+    }
+
+    // nota: el bit restante (si quedara) ya fue colocado en (8,8) arriba.
+}
 
 int main(){
     string url;
@@ -281,7 +342,9 @@ int main(){
     vector<int>bits_correccion = correccion_errores(datos_completos);
 
     construir_matriz_basica_simple();
+    colocar_format_info();
     insertar_datos(datos_completos, bits_correccion);
+    aplicar_mascara_0();
     imprimir_matriz();
     
     return 0;
