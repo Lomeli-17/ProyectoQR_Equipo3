@@ -1,508 +1,504 @@
-
-#include<iostream>
-#include<string>
-#include<vector>
+#include <bits/stdc++.h>
 using namespace std;
 
-vector<int>codificacion_de_datos(const string &s){
-    vector<int>bits;
-    // modo bytes (0100=4)
-    int indicador=0b0100;
-    for(int b=3; b>=0; --b)
-        bits.push_back((indicador>>b)&1);
+const int version=2; //define la versión del código qr
+const int tamano=21+4*(version-1); // 25 (calcula el tamaño de la matriz)
+const int total_bytes_datos=34; // v2-L (calcula los bytes totales de datos, o sea 34)
+const int ECC_bytes=10; //calcula los bytes de corrección de errores, o sea 10
+const int num_bloques=1; // número de bloques (v2-L tiene 1 bloque)
 
-    // longitud del url
-    int longitud=s.size();
-    for(int b=7; b>=0; --b)
-        bits.push_back((longitud>>b)&1);
+// GF(256) para Reed-Solomon
+const int gf_polinomio=0x11d; // x^8 + x^4 + x^3 + x^2 + 1 (polinomio irreducible)
+int gf_exp[512]; //tablas de exponenciación y logaritmos
+int gf_log[256];
 
-    // datos, cada caracter en 8 bits (ascii)
-    for(unsigned char c:s){
-        for(int b=7; b>=0; --b){
-            bits.push_back((c>>b) &1);
+void gf_inicio() { // inicializa las tablas gf
+    int x=1;
+    for (int i=0;i<255;i++){ // genera tabla de exponenciación y logaritmos
+        gf_exp[i]=x;
+        gf_log[x]=i;
+        x<<=1;
+        if (x & 0x100) x ^= gf_polinomio; 
+    }
+    for (int i=255;i<512;i++) gf_exp[i] = gf_exp[i-255]; // para evitar el módulo en multiplicación
+    gf_exp[255] = gf_exp[0]; 
+}
+
+int gf_suma(int a,int b){ return a^b; } // suma en gf es xor
+int gf_mult(int a,int b){ // multiplicación en gf 
+    if (a==0 || b==0) return 0;
+    return gf_exp[(gf_log[a] + gf_log[b]) % 255]; 
+}
+
+// genera el polinomio generador para reed-solomon
+vector<int>polinomio_generador(int bytes_correccion){
+    vector<int>g={1}; //inicializa polinomio
+    for (int i=0;i<bytes_correccion;i++){ //itera una vez por cada byte de correción
+        vector<int>siguiente(g.size()+1, 0);
+        for (size_t j=0;j<g.size();j++){  //recorre los coeficientes actuales
+            // multiplica por (x + alpha^i)
+            siguiente[j]^=g[j]; // siguiente[j] += g[j] (xor)
+            // siguiente[j+1] += g[j]*(alpha^i)
+            siguiente[j+1]^=gf_mult(g[j], gf_exp[i]);
         }
+        g.swap(siguiente); //se cambia el polinomio actual por el que se acaba de calcular
     }
-
-    // bits de relleno 
-    while(bits.size()%8 !=0){
-        bits.push_back(0);
-    }
-    
-    return bits;
+    return g;
 }
 
-
-vector<int>estructura_de_datos(const vector<int> &bits_iniciales){
-    vector<int>bits = bits_iniciales;  
-    // copio los bits que hizo Renata para trabajar sobre ellos
-    int tamano_total = 152;  
-    // esta versión del QR ocupa 152 bits para los datos
-    bool alternar = true;  
-    // sirve para ir cambiando entre EC y 11 como pide la norma
-    while(bits.size() < tamano_total){
-        // mientras todavía falten bits, sigo agregando los bytes de relleno
-        if(alternar){
-            int pad = 0xEC;  
-            // primer byte de relleno (11101100)
-            for(int b = 7; b >= 0; b--){
-                bits.push_back((pad >> b) & 1);  
-                // meto cada bit del byte al vector
-            }
-        }else{
-            int pad = 0x11;  
-            // segundo byte de relleno (00010001)
-            for(int b = 7; b >= 0; b--){
-                bits.push_back((pad >> b) & 1);  
-                // igual convierto este byte a bits y lo agrego
-            }
-        }
-        alternar = !alternar;  
-        // cambio para que el siguiente sea el otro byte
-    }
-    if(bits.size() > tamano_total){
-        bits.resize(tamano_total);  
-        // por si me paso por error, lo dejo exacto en 152 bits
-    }
-    return bits;  
-    // regreso los bits ya completos
-}
-// multiplicación en gf(2^8), aritmética modular en un día.
-int gf_mult(int a, int b) {
-    int r = 0;
-    for (int i = 0; i < 8; i++) {
-        if (b & 1) r ^= a;
-        int alto = a & 0x80;
-        a <<= 1;
-        if (alto) a ^= 0x11D;
-        b >>= 1;
-    }
-    return r & 0xFF;
-}
-// convierte bits a bytes debido a que reed Solomon no puede trabajar con bits, solo bytes
-vector<int> bitsABytes(const vector<int>& bits) {
-    vector<int> out;
-    for (size_t i = 0; i < bits.size(); i += 8) {
-        int x = 0;
-        for (int j = 0; j < 8; j++) {
-            x = (x << 1) | bits[i + j];
-        }
-        out.push_back(x & 0xFF);
-    }
-    return out;
-}
-
-// corrección de errores Reed-Solomon 
-vector<int> correccion_errores(const vector<int> &bitsDatos) {
-    vector<int> datos = bitsABytes(bitsDatos);
-    // como solo son 7 coeficientes, pues los pongo directamente
-    vector<int> gen = {87, 229, 146, 149, 238, 102, 21};
-    // la cantidad de bytes de corrección que se haran
-    int nsym = gen.size();
-
-    vector<int> ecc(nsym, 0);
-
-    for (size_t idx = 0; idx < datos.size(); ++idx) {
-        int d = datos[idx];
-        int f = d ^ ecc[0];
-
-        for (int i = 0; i < nsym - 1; i++)
-            ecc[i] = ecc[i + 1];
-        ecc[nsym - 1] = 0;
-        //se ultiliza el xor para saber si se va a corregiro mo
-         if (f != 0) {
-            for (int i = 0; i < nsym; i++)
-                ecc[i] ^= gf_mult(gen[i], f);
-        }
-    }
-    //transformó todo otra vez a bytes
-    vector<int> bitsECC;
-    bitsECC.reserve(nsym * 8);
-    for (int e : ecc) {
-        for (int b = 7; b >= 0; b--)
-            bitsECC.push_back((e >> b) & 1);
-    }
-    return bitsECC;
-}
- const int N = 21; 
-    vector<vector<int>> matriz(N, vector<int>(N, -1));
-    vector<vector<bool>> usado(N, vector<bool>(N, false));
-    
-void poner_finder_con_separador(int r0, int c0) {
-    for (int r = 0; r < 7; ++r) {
-        for (int c = 0; c < 7; ++c) {
-            bool borde = (r == 0 || r == 6 || c == 0 || c == 6);
-            bool centro = (r >= 2 && r <= 4 && c >= 2 && c <= 4);
-            matriz[r0 + r][c0 + c] = (borde || centro) ? 1 : 0;
-            usado[r0 + r][c0 + c] = true;
-        }
-    }
-    // separador blanco 
-    for (int r = -1; r <= 7; ++r) {
-        for (int c = -1; c <= 7; ++c) {
-            int rr = r0 + r, cc = c0 + c;
-            if (rr < 0 || rr >= N || cc < 0 || cc >= N) continue;
-            if (r >= 0 && r <= 6 && c >= 0 && c <= 6) continue; // no pisar el finder
-            matriz[rr][cc] = 0;
-            usado[rr][cc] = true;
-            }
-         }
-    }
-void poner_finders() {
-    poner_finder_con_separador(0, 0);      // arriba-izquierda (fila 0, col 0)
-    poner_finder_con_separador(0, N - 7); // arriba-derecha (fila 0, col 14)
-    poner_finder_con_separador(N - 7, 0); // abajo-izquierda (fila 14, col 0)
-} 
-
- void poner_timing_simples() {
-       for (int c = 0; c < N; ++c) {
-        if (!usado[6][c]) { matriz[6][c] = (c % 2 == 0) ? 1 : 0; usado[6][c] = true; }
-        }
-    for (int r = 0; r < N; ++r) {
-        if (!usado[r][6]) { matriz[r][6] = (r % 2 == 0) ? 1 : 0; usado[r][6] = true; }
-        }
-    }
-    
-   void reservar_format_info() {
-    // copia original (arriba/izquierda de la matriz).
-    for (int c = 0; c <= 8; ++c) {
-        if (!usado[8][c]) { matriz[8][c] = 0; usado[8][c] = true; }
-    }
-    for (int r = 0; r <= 8; ++r) {
-        if (!usado[r][8]) { matriz[r][8] = 0; usado[r][8] = true; }
-    }
-    // copia espejo (abajo/derecha de la matriz).
-    for (int i = 0; i <= 8; ++i) {
-        int c = N - 1 - i; // columnas N-1 ... N-9
-        if (c >= 0 && !usado[8][c]) { matriz[8][c] = 0; usado[8][c] = true; }
-        int r = N - 1 - i; // filas N-1 ... N-9
-        if (r >= 0 && !usado[r][8]) { matriz[r][8] = 0; usado[r][8] = true; }
-    }
-}
-    
-   void poner_dark_module() {
-    int rr = 8;
-    int cc = N - 8;
-    if (!usado[rr][cc]) {
-        matriz[rr][cc] = 1;
-        usado[rr][cc] = true;
-    }
-}
-    
-  void construir_matriz_basica_simple() {
-    for (int r = 0; r < N; ++r) for (int c = 0; c < N; ++c) { matriz[r][c] = -1; usado[r][c] = false; }
-    poner_finders();
-    poner_timing_simples();
-    poner_dark_module();
-}
-
-void insertar_datos(const vector<int> &bitsDatos, const vector<int> &bitsECC) {
-    vector<int> bitsTotales = bitsDatos;
-    bitsTotales.insert(bitsTotales.end(), bitsECC.begin(), bitsECC.end());
-
-    int i = 0;
-    int col = N - 1;
-    bool hacia_arriba = true; // el primer par (20,19) va hacia arriba
-
-    while (col > 0) {
-        if (col == 6) { // se salta la columna 6 por el timing
-            col--;
-            //par siguiente conserva la misma dirección
-            if (col <= 0) break;
-        }
-        // definir las 2 columnas actuales
-        int c1 = col;
-        int c2 = col - 1;
-        
-        if (hacia_arriba) { //de abajo hacia arriba
-            for (int r = N - 1; r >= 0; --r) {
-                for (int j = 0; j < 2; ++j) {
-                    int c = (j == 0) ? c1 : c2;
-                    if (c < 0 || c >= N) continue;
-                    if (usado[r][c]) continue;
-                    matriz[r][c] = (i < (int)bitsTotales.size()) ? bitsTotales[i++] : 0;
-                    usado[r][c] = true;
-                }
-            }
-        } else { // de arriba hacia abajo
-            for (int r = 0; r < N; ++r) {
-                for (int j = 0; j < 2; ++j) {
-                    int c = (j == 0) ? c1 : c2;
-                    if (c < 0 || c >= N) continue;
-                    if (usado[r][c]) continue; // si ya está usado lo salta
-                    matriz[r][c] = (i < (int)bitsTotales.size()) ? bitsTotales[i++] : 0;
-                    usado[r][c] = true; // marca como usado
-                }
-            }
-        }
-
-        // avanza al siguiente par de columnas y alterna  la dirección
-        col -= 2;
-        hacia_arriba = !hacia_arriba;
-    }
-}
-void reservar_format_info_correcto() {
-    // fila 8, columnas 0..5
-    for (int c = 0; c <= 5; ++c) { usado[8][c] = true; matriz[8][c] = -1; }
-    // columna 8, filas 0..5
-    for (int r = 0; r <= 5; ++r) { usado[r][8] = true; matriz[r][8] = -1; }
-    // los tres módulos alrededor (7,8),(8,7),(8,8)
-    usado[7][8] = true; matriz[7][8] = -1;
-    usado[8][7] = true; matriz[8][7] = -1;
-    usado[8][8] = true; matriz[8][8] = -1;
-    // copia espejo: fila 8, columnas N-1 .. N-7
-    for (int i = 0; i < 7; ++i) { int c = N - 1 - i; usado[8][c] = true; matriz[8][c] = -1; }
-    // copia espejo: columna 8, filas N-1 .. N-7
-    for (int i = 0; i < 7; ++i) { int r = N - 1 - i; usado[r][8] = true; matriz[r][8] = -1; }
-}
-//reemplazo de la mascara fija por seleccion automatica
-// devuelve true si la condicion de la mascara id se cumple en (r,c)
-bool mask_cond(int id, int r, int c) {
-    switch(id) {
-        case 0: return ((r + c) % 2) == 0;
-        case 1: return (r % 2) == 0;
-        case 2: return (c % 3) == 0;
-        case 3: return ((r + c) % 3) == 0;
-        case 4: return ((r/2 + c/3) % 2) == 0;
-        case 5: return ((r*c) % 2 + (r*c) % 3) == 0;
-        case 6: return (((r*c) % 2 + (r*c) % 3) % 2) == 0;
-        case 7: return (((r+c) % 2 + (r*c) % 3) % 2) == 0;
-    }
-    return false;
-}
-
-// aplica la mascara 'id' sobre la matriz real (respeta usado)
-void aplicar_mascara_id(int id) {
-    for (int r = 0; r < N; ++r) {
-        for (int c = 0; c < N; ++c) {
-            if (usado[r][c]) continue;
-            if (matriz[r][c] == 0 || matriz[r][c] == 1) {
-                if (mask_cond(id, r, c)) matriz[r][c] ^= 1;
+// calcula los bytes de paridad para los datos dados
+vector<int> rs_calcula_paridad(const vector<int>& datos, int bytes_correccion){
+    vector<int>gen=polinomio_generador(bytes_correccion); // obtiene el polinomio generador
+    vector<int>temporal(datos.begin(), datos.end());
+    temporal.resize(datos.size()+bytes_correccion, 0);
+    for (size_t i=0;i<datos.size();i++){ // procesa cada byte de datos
+        int factor=temporal[i];
+        if (factor!=0){
+            for (size_t j=0;j<gen.size();j++){
+                temporal[i+j]^=gf_mult(gen[j], factor);
             }
         }
     }
+    vector<int> paridad(bytes_correccion); //extrae los bytes de paridad
+    for (int i=0;i<bytes_correccion;i++) paridad[i] = temporal[datos.size()+i];
+    return paridad; 
 }
 
-//funciones para evaluar penalizacion N1..N4 (simplificada pero suficiente)
-int penalizacion_para_mascara(int id) {
-    vector<vector<int>> tmp = matriz;
-    // aplicar mascara sobre copia (solo donde no es fijo)
-    for (int r = 0; r < N; ++r) for (int c = 0; c < N; ++c) {
-        if (usado[r][c]) continue;
-        if (tmp[r][c] == 0 || tmp[r][c] == 1) {
-            if (mask_cond(id, r, c)) tmp[r][c] ^= 1;
-        }
+//matriz y funciones para colocar patrones
+enum CellStat { sin_establecer= -1, blanco=0, negro=1, reservado=2 };
+
+struct Matrix { //permite agrupar variables relacionadas con la matriz del código qr
+    int n;
+    vector<vector<int>> cell; 
+    vector<vector<bool>> reservado; 
+    Matrix(int n=0): n(n), cell(n, vector<int>(n, sin_establecer)), reservado(n, vector<bool>(n,false)) {}
+    void set(int r,int c,int v,bool siReservado=false){ //establece el valor de una celda y si está reservada
+        if (r<0||c<0||r>=n||c>=n) return;
+        cell[r][c]=v;
+        if (siReservado) reservado[r][c]=true;
     }
-
-    int score = 0;
-    //secuencias horizontales y verticales >=5
-    for (int r = 0; r < N; ++r) {
-        int run = 1;
-        for (int c = 1; c < N; ++c) {
-            if (tmp[r][c] == tmp[r][c-1]) run++; else { if (run >= 5) score += 3 + (run-5); run = 1; }
-        }
-        if (run >= 5) score += 3 + (run-5);
+    int get(int r,int c) const { //si consulta fuera de rango devuelve blanco
+        if (r<0||c<0||r>=n||c>=n) return blanco;
+        return cell[r][c];
     }
-    for (int c = 0; c < N; ++c) {
-        int run = 1;
-        for (int r = 1; r < N; ++r) {
-            if (tmp[r][c] == tmp[r-1][c]) run++; else { if (run >= 5) score += 3 + (run-5); run = 1; }
-        }
-        if (run >= 5) score += 3 + (run-5);
+    bool siReservado(int r,int c) const { //indica si una celda está reservada
+        if (r<0||c<0||r>=n||c>=n) return true;
+        return reservado[r][c];
     }
-
-    // bloques 2x2
-    for (int r = 0; r < N-1; ++r) for (int c = 0; c < N-1; ++c) {
-        int v = tmp[r][c];
-        if (v==tmp[r][c+1] && v==tmp[r+1][c] && v==tmp[r+1][c+1]) score += 3;
-    }
-
-    // patrones tipo 1:1:3:1:1 (simplificado)
-    for (int r = 0; r < N; ++r) {
-        for (int c = 0; c <= N-7; ++c) {
-            if (tmp[r][c]==1 && tmp[r][c+1]==0 && tmp[r][c+2]==1 && tmp[r][c+3]==1 && tmp[r][c+4]==1 && tmp[r][c+5]==0 && tmp[r][c+6]==1) {
-                score += 40;
-            }
-        }
-    }
-    for (int c = 0; c < N; ++c) {
-        for (int r = 0; r <= N-7; ++r) {
-            if (tmp[r][c]==1 && tmp[r+1][c]==0 && tmp[r+2][c]==1 && tmp[r+3][c]==1 && tmp[r+4][c]==1 && tmp[r+5][c]==0 && tmp[r+6][c]==1) {
-                score += 40;
-            }
-        }
-    }
-
-    // balance de oscuros (porcentaje)
-    int total = 0, dark = 0;
-    for (int r = 0; r < N; ++r) for (int c = 0; c < N; ++c) if (tmp[r][c]==0 || tmp[r][c]==1) { total++; if (tmp[r][c]==1) dark++; }
-    if (total > 0) {
-        int percent = (dark * 100) / total;
-        int prev5 = abs(percent - 50) / 5;
-        score += prev5 * 10;
-    }
-
-    return score;
-}
-
-// elige la mascara con menor penalizacion
-int elegir_mejor_mascara() {
-    int best = 0;
-    int bestScore = (1<<30); // CAMBIO: uso un valor grande en lugar de incluir <climits>
-    for (int m = 0; m < 8; ++m) {
-        int s = penalizacion_para_mascara(m);
-        if (s < bestScore) { bestScore = s; best = m; }
-    }
-    return best;
-}
-
-/* generacion correcta de los 15 bits de formato (5 bits de datos + 10 bits BCH) y XOR con 0x5412
- ec_level: 0=L,1=M,2=Q,3=H  (usamos la codificacion de 2 bits: L=01, M=00, Q=11, H=10)*/
-int generar_format_bits_int(int mask_id, int ec_level) {
-    // mapear ec_level a los 2 bits segun estandar: L=01, M=00, Q=11, H=10
-    int ec_bits;
-    switch(ec_level) {
-        case 0: ec_bits = 0b01; break; // L
-        case 1: ec_bits = 0b00; break; // M
-        case 2: ec_bits = 0b11; break; // Q
-        case 3: ec_bits = 0b10; break; // H
-        default: ec_bits = 0b00; break;
-    }
-    int data = (ec_bits << 3) | (mask_id & 0x7); // 5 bits
-    int d = data << 10; // espacio para 10 bits BCH
-    int g = 0x537; // generador para BCH(15,5)
-    // calcular resto del polinomio
-    for (int i = 14; i >= 10; --i) {
-        if (d & (1 << i)) {
-            d ^= (g << (i - 10));
-        }
-    }
-    int format15 = ((data << 10) | (d & 0x3FF)) ^ 0x5412; // XOR con la mascara 0x5412
-    return format15 & 0x7FFF; // 15 bits
-}
-vector<int> format_info_bits = {
-    1,1,1,0,1,1,1,1,1,0,0,0,1,0,0
-};
-
-void colocar_format_info() {
-
-    // fila 8, columnas 0–5  (6 bits)
-    for (int i = 0; i < 6; i++) {
-        matriz[8][i] = format_info_bits[i];
-        usado[8][i]  = true;
-    }
-
-    // columna 8, filas 0–5  (siguientes 6)
-    for (int i = 0; i < 6; i++) {
-        matriz[i][8] = format_info_bits[6 + i];
-        usado[i][8]  = true;
-    }
-
-    // saltar (8,6) que es timing pattern, continuar con los 3 bits restantes
-    matriz[7][8] = format_info_bits[12];
-    usado[7][8] = true;
-
-    matriz[8][7] = format_info_bits[13];
-    usado[8][7] = true;
-
-    matriz[8][8] = format_info_bits[14];
-    usado[8][8] = true;
-
-    //  copia espejo (derecha e inferior)
-
-    // fila 8, columnas N-1 .. N-7  <- bits 0..6 (en el mismo orden)
-    for (int i = 0; i < 7; ++i) {
-        int c = N - 1 - i;
-        matriz[8][c] = format_info_bits[i];
-        usado[8][c] = true;
-    }
-
-    // columna 8, filas N-1 .. N-7  <- bits 14..8 (colocados de arriba hacia abajo en espejo)
-    int k = 14;
-    for (int r = N - 1; r >= N - 7; --r) {
-        matriz[r][8] = format_info_bits[k--];
-        usado[r][8] = true;
-    }
-
-    // nota: el bit restante (si quedara) ya fue colocado en (8,8) arriba.
-}
-
-void aplicar_mascara_0() {
-    //(fila + columna) % 2 == 0  → invertir el bit del modulo si NO es un modulo fijo
-    for (int r = 0; r < N; r++) {
-        for (int c = 0; c < N; c++) {
-            // solo modificar modulos de datos, nunca los fijos
-            if (usado[r][c]) continue;
-            // si es blanco/negro valido
-            if (matriz[r][c] == 0 || matriz[r][c] == 1) {
-                // condición de mascara 0
-                if (((r + c) % 2) == 0) {
-                    matriz[r][c] ^= 1; // invertir bit
-                }
-            }
-        }
-    }
-}
-void imprimir_matriz() {
-    for (int r = 0; r < N; ++r) {
-        for (int c = 0; c < N; ++c) {
-            if (matriz[r][c] == 1) cout << "██";
-            else if (matriz[r][c] == 0) cout << "  ";
-            else cout << "..";
-        }
-        cout << '\n';
-    }
-}
-/*    void imprimir_matriz() {
-    
-        // imprime la matriz usando ascii 254 para negro y espacio para blanco
-        for(int r = 0; r < N; r++){
-            for(int c = 0; c < N; c++){
-    
-                if(matriz[r][c] == 1){
-                    cout << (char)254;  // negro
-                }
-                else if(matriz[r][c] == 0){
-                    cout << ' ';        // blanco
-                }
-                else{
-                    cout << '?';        // por si algo quedo sin asignar (por ahora va a ser hasta que se inserten los datos)
-                }
+   void printAscii() const { //funcion para imprimir la matriz en ASCII
+        for (int r=0;r<n;r++){
+            for (int c=0;c<n;c++){
+                int v = cell[r][c];
+                bool n = (v==negro);
+                cout << (n ? "\xE2\x96\x88" : " ");
             }
             cout << "\n";
         }
-   }
-        CAMBIE ESTA FUNCIÓN SEGÚN YO PARA QUE SE VEA MEJOR, PERO NO SÉ QUE FORMATO PREFIERAN DEJAR*/
+    }
+    void toPPM(const string &fname, int scale=8) const { //funcion para guardar la matriz en un archivo PPM
+        int w = n*scale;
+        int h = n*scale;
+        FILE* f = fopen(fname.c_str(),"wb");
+        if(!f) return;
+        fprintf(f,"P6\n%d %d\n255\n", w, h);
+        for (int r=0;r<n;r++){
+            for (int sy=0; sy<scale; sy++){
+                for (int c=0;c<n;c++){
+                    bool n = (cell[r][c]==negro);
+                    unsigned char col[3];
+                    if (n){ col[0]=col[1]=col[2]=0; }
+                    else { col[0]=col[1]=col[2]=0xDD; }
+                    for (int sx=0;sx<scale;sx++) fwrite(col,1,3,f);
+                }
+            }
+        }
+        fclose(f);
+    }
+};
+
+// patrones fijos
+void marcadores_posicion(Matrix &M, int r, int c){ //marcadores de posición
+    static const int patt[7][7] = {
+        {1,1,1,1,1,1,1},
+        {1,0,0,0,0,0,1},
+        {1,0,1,1,1,0,1},
+        {1,0,1,1,1,0,1},
+        {1,0,1,1,1,0,1},
+        {1,0,0,0,0,0,1},
+        {1,1,1,1,1,1,1}
+    };
+    for (int dr=0;dr<7;dr++) for (int dc=0;dc<7;dc++){
+        M.set(r+dr, c+dc, patt[dr][dc]==1 ? negro : blanco, true);
+    }
+    // borde blanco
+    for (int i=-1;i<=7;i++){
+        if (r-1>=0 && c+i>=0 && c+i<M.n) M.set(r-1,c+i,blanco,true);
+        if (r+7<M.n && c+i>=0 && c+i<M.n) M.set(r+7,c+i,blanco,true);
+        if (r+i>=0 && r+i<M.n && c-1>=0) M.set(r+i,c-1,blanco,true);
+        if (r+i>=0 && r+i<M.n && c+7<M.n) M.set(r+i,c+7,blanco,true);
+    }
+}
+
+void timing(Matrix &M){
+    for (int i=8;i<M.n-8;i++){
+        if (!M.siReservado(6,i)) M.set(6,i, (i%2)==0 ? negro : blanco, true);
+        if (!M.siReservado(i,6)) M.set(i,6, (i%2)==0 ? negro : blanco, true);
+    }
+}
+
+//patrones de alineación
+void patrones_alineacion(Matrix &M, const vector<int>& centro){
+    for (int cy : centro){
+        for (int cx : centro){
+            // evitar empalmarse con los marcadores de posición
+            if ((cy==6 && (cx==6 || cx==M.n-7)) || (cy==M.n-7 && cx==6)) continue;
+            for (int dy=-2; dy<=2; dy++){ 
+                for (int dx=-2; dx<=2; dx++){
+                    int rr=cy+dy, cc=cx+dx;
+                    int val;
+                    if (abs(dy)==2 || abs(dx)==2) val=negro; //borde negro, centro negro, interior blanco
+                    else if (dy==0 && dx==0) val=negro;
+                    else val=blanco;
+                    M.set(rr,cc,val,true); 
+                }
+            }
+        }
+    }
+}
+
+void dark_module(Matrix &M){
+    int r = 8;
+    int c = 4*version + 9;
+    M.set(r,c,negro,true); 
+}
+
+void reservar_bits_formato(Matrix &M){
+    int n = M.n;
+    // linea horizontal en fila 8
+    for (int c=0;c<=8;c++){
+        if (c==6) continue;
+        if (!M.siReservado(8,c)) M.set(8,c,blanco,true);
+    }
+    // vertical en columna 8
+    for (int r=0;r<=8;r++){
+        if (r==6) continue;
+        if (!M.siReservado(r,8)) M.set(r,8,blanco,true);
+    }
+    // copia esquina superior derecha
+    for (int c = n-8; c<n; c++){
+        if (!M.siReservado(8,c)) M.set(8,c,blanco,true);
+    }
+    // copia esquina inferior izquierda
+    for (int r = n-8; r<n; r++){
+        if (!M.siReservado(r,8)) M.set(r,8,blanco,true);
+    }
+}
+
+// insertar datos (zig-zag)
+void insertar_datos(Matrix &M, const vector<int>& bits){
+    int n=M.n;
+    int pos=0;
+    int col=n-1;
+    int dir=-1; // -1 arriba, +1 abajo
+    int fila=n-1;
+    while (col>0){
+        if (col==6) col--; //saltar timing vertical
+        for (;;){ 
+            for (int c = col; c >= col-1; c--){ // dos columnas a la vez
+                if (c<0 || c>=n) continue;
+                if (!M.siReservado(fila,c) && M.cell[fila][c]==sin_establecer){
+                    int bit=0;
+                    if (pos < (int)bits.size()) bit = bits[pos++]; // obtener siguiente bit
+                    M.set(fila,c, bit ? negro : blanco, false); //colocar bit
+                }
+            }
+            fila+=dir; //mueve la posición una fila arriba o abajo según la dirección
+            if (fila < 0 || fila >= n) break; //salir del bucle si llega al extremo
+        }
+        dir=-dir;
+        fila+=dir;
+        col-=2;
+    }
+}
+//máscara
+bool mascaras(int mask, int r, int c){
+    switch(mask){ //evalua segun las máscaras
+        case 0: return ((r + c) % 2) == 0; //invierte cuando la suma de fila y columna es par
+        case 1: return (r % 2) == 0; //invierte cuando la fila es par
+        case 2: return (c % 3) == 0; //invierte cuando la columna es multiplo de 3
+        case 3: return ((r + c) % 3) == 0; //invierte cuando la suma es multiplo de 3
+        case 4: return (((r/2) + (c/3)) % 2) == 0; //invierte cuando (fila/2)+(col/3) es par
+        case 5: return (((r*c) % 2) + ((r*c) % 3)) == 0; //invierte r*c es divisible entre 6
+        case 6: return ((((r*c) % 2) + ((r*c) % 3)) % 2) == 0; //invierte r*c es divisible entre 6 y además la suma entre 2
+        case 7: return ((((r+c) % 2) + ((r*c) % 3)) % 2) == 0; //si la suma es par se invierte
+    }
+    return false; //si la máscara no es válida
+}
+
+Matrix aplicar_mascara(const Matrix &src, int mascara){
+    Matrix dst = src;
+    for (int r=0;r<dst.n;r++) for (int c=0;c<dst.n;c++){
+        if (src.siReservado(r,c)) continue;
+        int v = src.cell[r][c];
+        if (v==sin_establecer) continue;
+        if (mascaras(mascara,r,c)){
+            dst.cell[r][c] = (v==negro) ? blanco : negro;
+        }
+    }
+    return dst;
+}
+
+inline bool esNegro(const Matrix &M, int r, int c){
+    return M.cell[r][c] == negro;
+}
+int penalizacion(const Matrix &M){
+    int n=M.n, pen=0;
+
+    auto procesaLinea = [&](auto obtener){
+        int colorAct=-1, longitud=0;
+        for (int i=0;i<n;i++){
+            int v = obtener(i);
+            int color = (v==negro);
+            if (color == colorAct) longitud++;
+            else{
+                if (longitud >= 5) pen += 3 + (longitud - 5);
+                colorAct = color;
+                longitud = 1;
+            }
+        }
+        if (longitud >= 5) pen += 3 + (longitud - 5);
+    };
+
+    // filas
+    for (int r=0;r<n;r++)
+        procesaLinea([&](int i){ return M.cell[r][i]; });
+
+    // columnas
+    for (int c=0;c<n;c++)
+        procesaLinea([&](int i){ return M.cell[i][c]; });
+    return pen;
+}
+
+// bloques 2x2
+int penalizacion_2x2(const Matrix &M){
+    int n=M.n, pen=0;
+
+    for (int r=0;r<n-1;r++)
+        for (int c=0;c<n-1;c++){
+            int b =
+                esNegro(M,r,c) +
+                esNegro(M,r,c+1) +
+                esNegro(M,r+1,c) +
+                esNegro(M,r+1,c+1);
+            if (b == 4) pen += 3;
+        }
+
+    return pen;
+}
+
+bool zonaBlanca(const Matrix &M, int r, int c0, int len, bool horizontal){
+    for (int i=0;i<len;i++){
+        int rr=r+(horizontal ? 0 : i);
+        int cc=c0+(horizontal ? i : 0);
+        if (esNegro(M,rr,cc)) return false;
+    }
+    return true;
+}
+
+int penalizacion_patron(const Matrix &M){
+    int n=M.n, pen=0;
+
+    // filas
+    for (int r=0;r<n;r++){
+        for (int c=0;c+6<n;c++){
+            if ( esNegro(M,r,c) && !esNegro(M,r,c+1) &&
+                 esNegro(M,r,c+2) && esNegro(M,r,c+3) && esNegro(M,r,c+4) &&
+                 !esNegro(M,r,c+5) && esNegro(M,r,c+6) ){
+
+                bool izq  = (c>=4)     && zonaBlanca(M,r,c-4,4,true);
+                bool der = (c+10<n)   && zonaBlanca(M,r,c+7,4,true);
+
+                if (izq || der) pen += 40;
+            }
+        }
+    }
+
+    // columnas
+    for (int c=0;c<n;c++){
+        for (int r=0;r+6<n;r++){
+            if ( esNegro(M,r,c) && !esNegro(M,r+1,c) &&
+                 esNegro(M,r+2,c) && esNegro(M,r+3,c) && esNegro(M,r+4,c) &&
+                 !esNegro(M,r+5,c) && esNegro(M,r+6,c) ){
+
+                bool arriba   = (r>=4)     && zonaBlanca(M,r-4,c,4,false);
+                bool abajo = (r+10<n)   && zonaBlanca(M,r+7,c,4,false);
+
+                if (arriba || abajo) pen += 40;
+            }
+        }
+    }
+
+    return pen;
+}
+
+int penalizacion_balance(const Matrix &M){
+    int n=M.n;
+    int total = n * n;
+    int negros = 0;
+    for (int r=0;r<n;r++)
+        for (int c=0;c<n;c++)
+            negros += esNegro(M,r,c);
+    int ratio = (negros * 100) / total;
+    return (abs(ratio - 50) / 5) * 10;
+}
+
+int total_penalizacion(const Matrix &M){ 
+    return penalizacion(M)
+         + penalizacion_2x2(M)
+         + penalizacion_patron(M)
+         + penalizacion_balance(M);
+}
+int bits_de_formato(int bits, int patron_mascara){
+    int datos = (bits << 3) | (patron_mascara & 0x7); // 5 bits
+    int d = datos << 10; 
+    int gp = 0b10100110111;
+    for (int i = 14; i >= 10; i--){
+        if ((d >> i) & 1) d ^= (gp << (i - 10));
+    }
+    int residuo = d & 0x3FF;
+    int formato = ((datos << 10) | residuo) ^ 0b101010000010010; 
+    return formato & 0x7FFF;
+}
+
+//bits de formato
+void escribir_bits_de_formato(Matrix &M, int bitsformato){
+    int n = M.n;
+    vector<pair<int,int>> pos1 = {
+        {8,0},{8,1},{8,2},{8,3},{8,4},{8,5},{8,7},{8,8},{7,8},{5,8},{4,8},{3,8},{2,8},{1,8},{0,8}
+    };
+    vector<pair<int,int>> pos2 = {
+        {n-1,8},{n-2,8},{n-3,8},{n-4,8},{n-5,8},{n-6,8},{n-7,8},{8,n-8},{8,n-7},{8,n-6},{8,n-5},{8,n-4},{8,n-3},{8,n-2},{8,n-1}
+    };
+    for (int i=0;i<15;i++){
+        int bit = (bitsformato >> (14 - i)) & 1;
+        auto [r1,c1] = pos1[i];
+        auto [r2,c2] = pos2[i];
+        M.set(r1,c1, bit?negro:blanco, true);
+        M.set(r2,c2, bit?negro:blanco, true);
+    }
+}
+
+// buffer (memoria temporal)
+struct memoriaTemp {
+    vector<int> bits;
+    void agregarBits(int val, int cant){
+        for (int i=cant-1;i>=0;i--) bits.push_back((val>>i)&1);
+    }
+    void agregarBytes(const vector<uint8_t> &bytes){
+        for (auto b: bytes) for (int i=7;i>=0;i--) bits.push_back((b>>i)&1);
+    }
+    // funcion convertir a bytes 
+    vector<uint8_t> bytes(int bytesTotales){
+        vector<int> b=bits;
+        int maxBits=bytesTotales*8;
+        //terminar con hasta 4 ceros
+        if ((int)b.size() < maxBits){
+            int term = min(4, maxBits - (int)b.size());
+            for (int i=0;i<term;i++) b.push_back(0);
+        }
+        // rellenar hasta el límite de byte
+        while (b.size()%8) b.push_back(0);
+        // convertir a bytes
+        vector<uint8_t>salida;
+        for (size_t i=0;i<b.size(); i+=8){
+            uint8_t v=0;
+            for (int j=0;j<8;j++)v=(v<<1) | b[i+j];
+            salida.push_back(v);
+        }
+        static const uint8_t pads[2]={0xEC, 0x11};
+        while ((int)salida.size()<bytesTotales) salida.push_back(pads[salida.size()%2]);
+        salida.resize(bytesTotales);
+        return salida;
+    }
+};
 
 int main(){
-    string url;
-    cout<<"Ingrese la URL: ";
-    getline(cin, url);
+    gf_inicio();
 
-    vector<int>datos = codificacion_de_datos(url);
-    vector<int>datos_completos = estructura_de_datos(datos);
-    vector<int>bits_correccion = correccion_errores(datos_completos);
+    cout << "Introduce la URL o texto a codificar: ";
+    string input;
+    getline(cin, input); // lee la entrada del usuario
+    memoriaTemp bb;
+    bb.agregarBits(0b0100, 4); // indicador de modo 0100
+    if (input.size() > 255){ // conteo de caracteres
+        cerr<<"Input demasiado largo (>=256), truncando a 255\n";
+        input = input.substr(0,255);
+    }
+    bb.agregarBits((int)input.size(), 8);
+    //bytes de datos
+    vector<uint8_t> raw;
+    for (unsigned char ch: input) raw.push_back(ch);
+    bb.agregarBytes(raw);
+    //obtener bytes finales de datos
+    vector<uint8_t> datos = bb.bytes(total_bytes_datos);
+    //convierte a enteros para RS
+    vector<int> datosInt(datos.begin(), datos.end());
+    //calcular paridad RS
+    vector<int> paridad= rs_calcula_paridad(datosInt, ECC_bytes);
+    //bytes finales del código QR
+    vector<int> bytes_finales = datosInt;
+    bytes_finales.insert(bytes_finales.end(), paridad.begin(), paridad.end());
 
-    construir_matriz_basica_simple();
-    reservar_format_info_correcto();
-    insertar_datos(datos_completos, bits_correccion);
-    for (int m = 0; m < 8; ++m) {
-        int s = penalizacion_para_mascara(m);
+    // convertir a bits finales
+    vector<int> bits_finales;
+    for (int cw: bytes_finales){
+        for (int i=7;i>=0;i--) bits_finales.push_back( (cw>>i)&1 );
     }
-    int mejor = elegir_mejor_mascara();
-    aplicar_mascara_id(mejor);
-    
-    // generar los 15 bits de formato con la máscara elegida y nivel EC
-    // elegimos nivel EC = M (1) por compatibilidad con tu estructura de datos (puedes cambiar a 0=L,2=Q,3=H)
-    int ec_level = 1; // 0=L,1=M,2=Q,3=H
-    int f15 = generar_format_bits_int(mejor, ec_level);
-    // actualizar el vector format_info_bits con los 15 bits (MSB primero)
-    format_info_bits.clear();
-    for (int i = 14; i >= 0; --i) {
-        format_info_bits.push_back((f15 >> i) & 1);
+
+    //construir la matriz base con patrones fijos
+    Matrix base(tamano);
+    marcadores_posicion(base, 0, 0);
+    marcadores_posicion(base, 0, tamano-7);
+    marcadores_posicion(base, tamano-7, 0);
+    timing(base);
+    vector<int> centros={6, 18};
+    patrones_alineacion(base, centros);
+    dark_module(base);
+    reservar_bits_formato(base);
+
+    // colocar datos (bits en zig-zag)
+    Matrix conDatos = base;
+    insertar_datos(conDatos, bits_finales);
+
+    // elegir la mejor máscara
+    int mejor=0;
+    int mejorPenalizacion=INT_MAX;
+    Matrix mejorMat;
+    for (int mask=0; mask<8; mask++){ // probar cada máscara
+        Matrix m = conDatos;
+        for (int r=0;r<m.n;r++) for (int c=0;c<m.n;c++){ // aplicar máscara
+            if (m.siReservado(r,c)) continue;
+            if (m.cell[r][c]==sin_establecer) continue;
+            if (mascaras(mask,r,c)) m.cell[r][c] = (m.cell[r][c]==negro) ? blanco : negro;
+        }
+        // escribir bits de formato
+        int ec_bits = 0b01;
+        int fbits = bits_de_formato(ec_bits, mask);
+        escribir_bits_de_formato(m, fbits);
+
+        int pen = total_penalizacion(m);
+        if (pen < mejorPenalizacion){
+            mejorPenalizacion = pen;
+            mejor = mask;
+            mejorMat = m;
+        }
     }
-    // ahora colocamos la info de formato (usa el vector actualizado)
-    colocar_format_info();
-    imprimir_matriz();
-    
+
+    cout<<"Código QR:\n";
+    cout<<"\n\n";
+    mejorMat.printAscii();
+    mejorMat.toPPM("out.ppm", 8);
+    cout << "\n\n";
+
     return 0;
 }
