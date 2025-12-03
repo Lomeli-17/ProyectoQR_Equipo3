@@ -431,7 +431,7 @@ int main(){
     memoriaTemp bb;
     bb.agregarBits(0b0100, 4); // indicador de modo 0100
     if (input.size() > 255){ // conteo de caracteres
-        cerr<<"Input demasiado largo (>=256), truncando a 255\n";
+        cerr<<"Entrada demasiado larga, truncado a 255\n";
         input = input.substr(0,255);
     }
     bb.agregarBits((int)input.size(), 8);
